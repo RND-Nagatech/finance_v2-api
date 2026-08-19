@@ -10,13 +10,17 @@ const userSchema = new Schema<IUser>(
       unique: true,
       trim: true,
     },
+    name: {
+      type: String,
+      trim: true,
+    },
     password: {
       type: String,
       required: true,
     },
     role: {
       type: String,
-      enum: ['admin', 'employee'],
+      enum: ['admin', 'employee', 'superuser', 'finance', 'user'],
       required: true,
     },
     pegawai_id: {
@@ -42,4 +46,4 @@ userSchema.pre('save', async function (next) {
   }
 });
 
-export default mongoose.model<IUser>('User', userSchema);
+export default mongoose.model<IUser>('User', userSchema, 'tm_user');

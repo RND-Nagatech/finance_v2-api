@@ -7,7 +7,8 @@ import { successResponse, errorResponse } from '../utils/response';
 
 export const login = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { username, password } = req.body;
+    const username = req.body.username || req.body.email;
+    const { password } = req.body;
 
     if (!username || !password) {
       errorResponse(res, 'Username and password are required');
@@ -38,6 +39,7 @@ export const login = async (req: AuthRequest, res: Response): Promise<void> => {
       user: {
         id: user._id,
         username: user.username,
+        name: user.name,
         role: user.role,
         pegawai_id: user.pegawai_id,
       },

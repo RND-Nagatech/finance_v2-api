@@ -36,7 +36,7 @@ export const isAdmin = (
     return;
   }
 
-  if (req.user.role !== 'admin') {
+  if (!['admin', 'superuser'].includes(req.user.role)) {
     errorResponse(res, 'Admin access required', undefined, 403);
     return;
   }

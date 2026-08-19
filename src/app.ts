@@ -31,6 +31,14 @@ app.use('/tasks', taskRoutes);
 app.use('/dashboard', dashboardRoutes);
 app.use('/report', reportRoutes);
 
+app.use('/api/auth', authRoutes);
+app.use('/api/divisi', divisionRoutes);
+app.use('/api/pegawai', employeeRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/tasks', taskRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/report', reportRoutes);
+
 app.use(errorHandler);
 
 export default app;

@@ -3,8 +3,9 @@ import { Request } from 'express';
 
 export interface IUser extends Document {
   username: string;
+  name?: string;
   password: string;
-  role: 'admin' | 'employee';
+  role: string;
   pegawai_id?: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
@@ -42,7 +43,7 @@ export interface AuthRequest extends Request {
   user?: {
     id: string;
     username: string;
-    role: 'admin' | 'employee';
+    role: string;
     pegawai_id?: string;
   };
 }
