@@ -22,6 +22,7 @@ export interface ITtFinanceDetail extends Document {
   deleted_by?: string;
   deleted_at?: Date;
   status_deleted?: boolean;
+  status_final?: boolean;
   attachments?: IAttachment[];
   is_validated?: boolean;
   validator_notes?: string;
@@ -59,6 +60,7 @@ const TtFinanceDetailSchema: Schema = new Schema({
   deleted_by: { type: String },
   deleted_at: { type: Date },
   status_deleted: { type: Boolean, default: false },
+  status_final: { type: Boolean, default: true, index: true },
   kode_perusahaan: { type: String },
   nama_perusahaan: { type: String },
   kode_bank: { type: String },

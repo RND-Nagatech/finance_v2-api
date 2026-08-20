@@ -511,6 +511,7 @@ function normalizeImportRow(row: any, rowNumber: number, actor: string) {
   const transactionMode = normalizeTransactionMode(row.transaction_mode, row.is_special_transaction);
   const isValidated = parseImportBoolean(row.is_validated, false);
   const statusDeleted = parseImportBoolean(row.status_deleted, false);
+  const statusFinal = parseImportBoolean(row.status_final, true);
   const createdAt = parseImportDate(row.created_at);
 
   const importId = row._id || row.id;
@@ -532,6 +533,7 @@ function normalizeImportRow(row: any, rowNumber: number, actor: string) {
     deleted_by: row.deleted_by || undefined,
     deleted_at: parseImportDate(row.deleted_at) === '-' ? undefined : parseImportDate(row.deleted_at),
     status_deleted: statusDeleted,
+    status_final: statusFinal,
     kode_perusahaan: String(row.kode_perusahaan || '').trim() || '-',
     nama_perusahaan: String(row.nama_perusahaan || '').trim() || '-',
     kode_bank: String(row.kode_bank || '').trim() || '-',
@@ -641,6 +643,10 @@ export const validateAttachment = async (req: Request, res: Response, next: Next
     const result = await runMongoTransaction(async (session) => {
       const doc = await TtFinanceDetail.findById(id).session(session);
       if (!doc) return { status: 404, body: { message: 'Transaksi detail not found' } };
+
+      if (doc.status_final === false) {
+        return { status: 400, body: { message: 'Transaksi belum final dan tidak bisa divalidasi.' } };
+      }
 
       const docFiscalYear = deriveTahunFiskalFromDetail(doc);
       if (await isFiscalYearClosed(docFiscalYear, session)) {
@@ -811,7 +817,7 @@ export const deleteAttachment = async (req: Request, res: Response, next: NextFu
 
 export const createTransaksi = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { kategori, sub_kategori, akun, bulan, nilai, input_by, tahun_fiskal, tanggal, keterangan, kode_perusahaan, nama_perusahaan, kode_bank, no_rekening, is_special_transaction, transaction_mode } = req.body;
+    const { kategori, sub_kategori, akun, bulan, nilai, input_by, tahun_fiskal, tanggal, keterangan, kode_perusahaan, nama_perusahaan, kode_bank, no_rekening, is_special_transaction, transaction_mode, status_final } = req.body;
     if (!kategori || !sub_kategori || !akun || !bulan || nilai === undefined) {
       return res.status(400).json({ message: 'kategori, sub_kategori, akun, bulan, nilai required' });
     }
@@ -883,6 +889,7 @@ export const createTransaksi = async (req: Request, res: Response, next: NextFun
       kode_bank: kode_bank && kode_bank.trim() !== '' ? kode_bank : '-',
       no_rekening: no_rekening && no_rekening.trim() !== '' ? no_rekening : '-',
       source_type: 'REKENING',
+      status_final: status_final === undefined ? true : Boolean(status_final),
       tahun_fiskal,
       is_special_transaction: transactionMode === 'SPECIAL',
       transaction_mode: transactionMode,
@@ -1040,7 +1047,7 @@ export const listTransaksi = async (req: Request, res: Response, next: NextFunct
 export const updateTransaksi = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-    const { kategori, sub_kategori, akun, bulan, nilai, input_by, tahun_fiskal, tanggal, keterangan, kode_perusahaan, nama_perusahaan, kode_bank, no_rekening, is_special_transaction, transaction_mode } = req.body;
+    const { kategori, sub_kategori, akun, bulan, nilai, input_by, tahun_fiskal, tanggal, keterangan, kode_perusahaan, nama_perusahaan, kode_bank, no_rekening, is_special_transaction, transaction_mode, status_final } = req.body;
     // Cari detail transaksi di tt_finance_detail
     const detail = await TtFinanceDetail.findById(id);
     if (!detail) return res.status(404).json({ message: 'Transaksi detail not found' });
@@ -1108,6 +1115,7 @@ export const updateTransaksi = async (req: Request, res: Response, next: NextFun
       kode_bank: kode_bank && kode_bank.trim() !== '' ? kode_bank : '-',
       no_rekening: no_rekening && no_rekening.trim() !== '' ? no_rekening : '-',
       source_type: 'REKENING',
+      status_final: status_final === undefined ? (detail.status_final !== false) : Boolean(status_final),
       tahun_fiskal: tahunFiskal,
       is_special_transaction: newTransactionMode === 'SPECIAL',
       transaction_mode: newTransactionMode,
@@ -1188,6 +1196,7 @@ export const batchCreateTransaksi = async (req: Request, res: Response, next: Ne
           no_rekening,
           is_special_transaction,
           transaction_mode,
+          status_final,
         } = item;
 
         // Validasi required fields
@@ -1247,6 +1256,7 @@ export const batchCreateTransaksi = async (req: Request, res: Response, next: Ne
           kode_bank: kode_bank && String(kode_bank).trim() !== '' ? kode_bank : '-',
           no_rekening: no_rekening && String(no_rekening).trim() !== '' ? no_rekening : '-',
           source_type: 'REKENING',
+          status_final: status_final === undefined ? true : Boolean(status_final),
           tahun_fiskal: tahunFiskal,
           is_special_transaction: transactionMode === 'SPECIAL',
           transaction_mode: transactionMode,
@@ -1395,6 +1405,49 @@ export const updateValidatorNotes = async (req: Request, res: Response, next: Ne
     doc.validator_notes_at = new Date();
     await doc.save();
     res.json({ success: true, message: 'Validator notes berhasil diperbarui', validator_notes_by: doc.validator_notes_by, validator_at: doc.validator_notes_at });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const updateStatusFinal = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = req.user as any;
+    const userRole = String(user?.role || '').toLowerCase();
+    if (!user || !['superuser', 'corsec', 'finance'].includes(userRole)) {
+      return res.status(403).json({ message: 'Unauthorized' });
+    }
+
+    const { id } = req.params;
+    const { status_final } = req.body || {};
+    if (status_final === undefined) {
+      return res.status(400).json({ message: 'status_final wajib diisi.' });
+    }
+
+    const doc = await TtFinanceDetail.findById(id);
+    if (!doc) return res.status(404).json({ message: 'Transaksi detail not found' });
+    if (doc.status_deleted === true) {
+      return res.status(400).json({ message: 'Transaksi yang sudah dihapus tidak bisa diubah status finalnya.' });
+    }
+
+    const fiscalYear = deriveTahunFiskalFromDetail(doc);
+    if (await isFiscalYearClosed(fiscalYear)) {
+      return res.status(400).json({ message: `Tahun fiskal ${fiscalYear} sudah ditutup dan status final tidak bisa diubah.` });
+    }
+
+    doc.status_final = Boolean(status_final);
+    doc.updated_by = user?.username || user?.name || user?.email || user?._id || 'SYSTEM';
+    doc.updated_at = new Date();
+    await doc.save();
+
+    res.json({
+      success: true,
+      message: doc.status_final ? 'Transaksi ditandai final.' : 'Transaksi ditandai belum final.',
+      data: {
+        id: doc._id,
+        status_final: doc.status_final,
+      },
+    });
   } catch (error) {
     next(error);
   }
