@@ -11,6 +11,7 @@ export interface IRekening extends Document {
   no_rekening: string;
   nama_rekening: string;
   saldo: number;
+  saldo_on_hold: number;
 }
 
 
@@ -24,6 +25,7 @@ const RekeningSchema: Schema = new Schema({
   no_rekening: { type: String, required: true, uppercase: true },
   nama_rekening: { type: String, required: true, uppercase: true },
   saldo: { type: Number, default: 0  },
+  saldo_on_hold: { type: Number, default: 0 },
 }, { timestamps: true, collection: 'tm_rekening' });
 
 export default mongoose.model<IRekening>('Rekening', RekeningSchema);

@@ -4,6 +4,7 @@ import Rekening from '../models/Rekening';
 import Bank from '../models/Bank';
 import Perusahaan from '../models/Perusahaan';
 import RekeningTransfer from '../models/RekeningTransfer';
+import TtFinanceDetail from '../models/TtFinanceDetail';
 
 const normalizePerusahaanIds = (body: any): string[] => {
   const raw = Array.isArray(body?.perusahaan_ids)
@@ -33,6 +34,18 @@ const resolvePerusahaanSelection = async (ids: string[]) => {
   return ids
     .map((id) => perusahaans.find((p: any) => String(p._id) === id))
     .filter(Boolean) as any[];
+};
+
+const getPendingRekeningDelta = (doc: any): number => {
+  if (doc?.is_validated === true || doc?.status_deleted === true) return 0;
+  if (String(doc?.transaction_mode || '').toUpperCase() === 'FINANCE_ONLY') return 0;
+  const kodeBank = String(doc?.kode_bank || '').trim();
+  const noRekening = String(doc?.no_rekening || '').trim();
+  if (!kodeBank || kodeBank === '-' || !noRekening || noRekening === '-') return 0;
+
+  const nilai = Number(doc?.nilai || 0);
+  if (!Number.isFinite(nilai) || nilai === 0) return 0;
+  return doc?.kategori === 'PENDAPATAN' ? nilai : -nilai;
 };
 
 export const getAllRekenings = async (req: Request, res: Response) => {
@@ -218,6 +231,80 @@ export const transferSaldoAntarRekening = async (req: Request, res: Response) =>
       return res.status(400).json({ message: msg });
     }
     return res.status(500).json({ message: msg });
+  } finally {
+    session.endSession();
+  }
+};
+
+export const rebuildSaldoOnHold = async (req: Request, res: Response) => {
+  const user = (req as any).user;
+  if (!user || String(user.role || '').toLowerCase() !== 'superuser') {
+    return res.status(403).json({ message: 'Hanya superuser yang bisa rebuild saldo on hold.' });
+  }
+
+  const session = await mongoose.startSession();
+  try {
+    let matchedPendingCount = 0;
+    let updatedRekeningCount = 0;
+    const includedDetailIds: mongoose.Types.ObjectId[] = [];
+    const totalsByRekening = new Map<string, { kode_bank: string; no_rekening: string; delta: number }>();
+    const detailIdsByRekening = new Map<string, mongoose.Types.ObjectId[]>();
+
+    await session.withTransaction(async () => {
+      await Rekening.updateMany({}, { $set: { saldo_on_hold: 0 } }, { session });
+      await TtFinanceDetail.updateMany({}, { $set: { saldo_on_hold_applied: false } }, { session });
+
+      const pendingDetails = await TtFinanceDetail.find({
+        is_validated: { $ne: true },
+        status_deleted: { $ne: true },
+      }).session(session);
+
+      for (const detail of pendingDetails) {
+        const delta = getPendingRekeningDelta(detail);
+        if (delta === 0) continue;
+
+        const kodeBank = String(detail.kode_bank || '').trim();
+        const noRekening = String(detail.no_rekening || '').trim();
+        const key = `${kodeBank}||${noRekening}`;
+        const current = totalsByRekening.get(key) || { kode_bank: kodeBank, no_rekening: noRekening, delta: 0 };
+        current.delta += delta;
+        totalsByRekening.set(key, current);
+        detailIdsByRekening.set(key, [...(detailIdsByRekening.get(key) || []), detail._id as mongoose.Types.ObjectId]);
+      }
+
+      for (const [key, item] of totalsByRekening.entries()) {
+        const result = await Rekening.updateOne(
+          { kode_bank: item.kode_bank, no_rekening: item.no_rekening },
+          { $set: { saldo_on_hold: item.delta } },
+          { session }
+        );
+        if (result.matchedCount > 0) {
+          updatedRekeningCount += 1;
+          includedDetailIds.push(...(detailIdsByRekening.get(key) || []));
+        }
+      }
+
+      if (includedDetailIds.length > 0) {
+        const result = await TtFinanceDetail.updateMany(
+          { _id: { $in: includedDetailIds } },
+          { $set: { saldo_on_hold_applied: true } },
+          { session }
+        );
+        matchedPendingCount = result.modifiedCount;
+      }
+    });
+
+    return res.json({
+      success: true,
+      message: 'Saldo on hold berhasil direbuild.',
+      data: {
+        pending_detail_count: includedDetailIds.length,
+        pending_marked_count: matchedPendingCount,
+        rekening_updated_count: updatedRekeningCount,
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Gagal rebuild saldo on hold.' });
   } finally {
     session.endSession();
   }

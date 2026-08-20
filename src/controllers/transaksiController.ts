@@ -112,6 +112,53 @@ function shouldAffectRekening(doc: any): boolean {
   return !isFinanceOnlyTransaction(doc);
 }
 
+function getRekeningBalanceDelta(doc: any): number {
+  if (!shouldAffectRekening(doc)) return 0;
+  if (doc?.status_deleted === true) return 0;
+  const kodeBank = String(doc?.kode_bank || '').trim();
+  const noRekening = String(doc?.no_rekening || '').trim();
+  if (!kodeBank || kodeBank === '-' || !noRekening || noRekening === '-') return 0;
+
+  const nilai = Number(doc?.nilai || 0);
+  if (!Number.isFinite(nilai) || nilai === 0) return 0;
+  return doc?.kategori === 'PENDAPATAN' ? nilai : -nilai;
+}
+
+async function incrementRekeningBalance(doc: any, inc: { saldo?: number; saldo_on_hold?: number }, session: ClientSession) {
+  const kodeBank = String(doc?.kode_bank || '').trim();
+  const noRekening = String(doc?.no_rekening || '').trim();
+  if (!kodeBank || kodeBank === '-' || !noRekening || noRekening === '-') return false;
+
+  const cleanInc = Object.fromEntries(
+    Object.entries(inc).filter(([, value]) => Number.isFinite(Number(value)) && Number(value) !== 0)
+  );
+  if (Object.keys(cleanInc).length === 0) return false;
+
+  const result = await Rekening.updateOne(
+    { kode_bank: kodeBank, no_rekening: noRekening },
+    { $inc: cleanInc },
+    { session }
+  );
+  return result.matchedCount > 0;
+}
+
+async function applySaldoOnHoldForPendingDetail(doc: any, session: ClientSession) {
+  if (doc?.is_validated || doc?.saldo_on_hold_applied) return;
+  const delta = getRekeningBalanceDelta(doc);
+  if (delta === 0) return;
+  const applied = await incrementRekeningBalance(doc, { saldo_on_hold: delta }, session);
+  if (applied) doc.saldo_on_hold_applied = true;
+}
+
+async function releaseSaldoOnHoldForPendingDetail(doc: any, session: ClientSession) {
+  if (!doc?.saldo_on_hold_applied) return;
+  const delta = getRekeningBalanceDelta(doc);
+  if (delta !== 0) {
+    await incrementRekeningBalance(doc, { saldo_on_hold: -delta }, session);
+  }
+  doc.saldo_on_hold_applied = false;
+}
+
 function shouldAffectDashboard(doc: any): boolean {
   return !isSpecialTransaction(doc);
 }
@@ -545,6 +592,13 @@ async function processImportRows(rows: any[], actor: string, startRow = 1) {
         const [doc] = await TtFinanceDetail.create([normalized], { session });
         let summaryRebuilt = false;
 
+        if (!doc.is_validated) {
+          await applySaldoOnHoldForPendingDetail(doc, session);
+          if (doc.isModified('saldo_on_hold_applied')) {
+            await doc.save({ session });
+          }
+        }
+
         if (shouldEnterSummaryV2(doc)) {
           await rebuildSummaryV2ForDetail(doc, session);
           await syncPostingStateForDetail(doc, session);
@@ -601,26 +655,22 @@ export const validateAttachment = async (req: Request, res: Response, next: Next
         return { status: 200, body: { success: true, message: 'Transaksi sudah divalidasi. Summary v2 sudah disinkronkan.' } };
       }
 
-      // Update saldo rekening jika ada rekening
-      if (shouldAffectRekening(doc) && doc.kode_bank && doc.no_rekening) {
-        const rekening = await Rekening.findOne({ kode_bank: doc.kode_bank, no_rekening: doc.no_rekening }).session(session);
-        if (rekening) {
-          let saldoAkhir = rekening.saldo;
-
-          if (doc.kategori === 'PENDAPATAN') {
-            saldoAkhir += doc.nilai;
-          } else {
-            saldoAkhir -= doc.nilai;
-          }
-
-          rekening.saldo = saldoAkhir;
-          await rekening.save({ session });
-        }
+      const saldoDelta = getRekeningBalanceDelta(doc);
+      if (saldoDelta !== 0) {
+        await incrementRekeningBalance(
+          doc,
+          {
+            saldo: saldoDelta,
+            saldo_on_hold: doc.saldo_on_hold_applied ? -saldoDelta : 0,
+          },
+          session
+        );
       }
 
       const validatorBy = user?.username || user?.email || user?._id || 'SYSTEM';
       const validatorAt = new Date();
       doc.is_validated = true;
+      doc.saldo_on_hold_applied = false;
       doc.validator_notes = validator_notes && String(validator_notes).trim() !== '' ? String(validator_notes) : '-';
       doc.validator_notes_by = validatorBy;
       doc.validator_notes_at = validatorAt;
@@ -683,21 +733,11 @@ export const deleteTransaksi = async (req: AuthRequest, res: Response, next: Nex
       if (!txDetail) throw new Error('Transaksi detail not found');
       if (txDetail.status_deleted === true) return txDetail;
 
-      // Rollback saldo rekening jika transaksi sebelumnya pernah memengaruhi saldo saat validasi.
-      if (txDetail.is_validated && shouldAffectRekening(txDetail) && txDetail.kode_bank && txDetail.no_rekening) {
-        const rekening = await Rekening.findOne({ kode_bank: txDetail.kode_bank, no_rekening: txDetail.no_rekening }).session(session);
-        if (rekening) {
-          let saldoAkhir = rekening.saldo;
-
-          if (txDetail.kategori === 'PENDAPATAN') {
-            saldoAkhir -= txDetail.nilai;
-          } else {
-            saldoAkhir += txDetail.nilai;
-          }
-
-          rekening.saldo = saldoAkhir;
-          await rekening.save({ session });
-        }
+      const saldoDelta = getRekeningBalanceDelta(txDetail);
+      if (txDetail.is_validated && saldoDelta !== 0) {
+        await incrementRekeningBalance(txDetail, { saldo: -saldoDelta }, session);
+      } else if (!txDetail.is_validated) {
+        await releaseSaldoOnHoldForPendingDetail(txDetail, session);
       }
 
       // Soft delete: set status_deleted, deleted_at, deleted_by
@@ -852,7 +892,13 @@ export const createTransaksi = async (req: Request, res: Response, next: NextFun
       posting_error: '-',
     });
 
-    await detail.save();
+    await runMongoTransaction(async (session) => {
+      await detail.save({ session });
+      await applySaldoOnHoldForPendingDetail(detail, session);
+      if (detail.isModified('saldo_on_hold_applied')) {
+        await detail.save({ session });
+      }
+    });
 
     res.json(detail);
   } catch (error) {
@@ -1037,13 +1083,6 @@ export const updateTransaksi = async (req: Request, res: Response, next: NextFun
       is_special_transaction ?? detail.is_special_transaction
     );
 
-    // 1. Soft delete old detail
-    detail.status_deleted = true;
-    detail.deleted_at = new Date();
-    detail.deleted_by = input_by || 'SYSTEM';
-    Object.assign(detail, buildPostingStatePatch({ ...detail.toObject(), status_deleted: true }));
-    await detail.save();
-
     // Hitung tahun fiskal dari bulan baru
     let tahunFiskal = tahun_fiskal;
     if (!tahunFiskal) {
@@ -1078,7 +1117,22 @@ export const updateTransaksi = async (req: Request, res: Response, next: NextFun
       posted_at: '-',
       posting_error: '-',
     });
-    await newDetail.save();
+    await runMongoTransaction(async (session) => {
+      await releaseSaldoOnHoldForPendingDetail(detail, session);
+
+      // 1. Soft delete old detail
+      detail.status_deleted = true;
+      detail.deleted_at = new Date();
+      detail.deleted_by = input_by || 'SYSTEM';
+      Object.assign(detail, buildPostingStatePatch({ ...detail.toObject(), status_deleted: true }));
+      await detail.save({ session });
+
+      await newDetail.save({ session });
+      await applySaldoOnHoldForPendingDetail(newDetail, session);
+      if (newDetail.isModified('saldo_on_hold_applied')) {
+        await newDetail.save({ session });
+      }
+    });
 
     res.json({ old_detail: detail, new_detail: newDetail });
   } catch (error) {
@@ -1202,7 +1256,13 @@ export const batchCreateTransaksi = async (req: Request, res: Response, next: Ne
           posting_error: '-',
         });
 
-        await doc.save();
+        await runMongoTransaction(async (session) => {
+          await doc.save({ session });
+          await applySaldoOnHoldForPendingDetail(doc, session);
+          if (doc.isModified('saldo_on_hold_applied')) {
+            await doc.save({ session });
+          }
+        });
         results.success.push({
           index: itemIndex,
           data: item,
@@ -1304,6 +1364,8 @@ export const getSaldoRekening = async (req: Request, res: Response, next: NextFu
       kode_bank: rekening.kode_bank,
       no_rekening: rekening.no_rekening,
       saldo: rekening.saldo,
+      saldo_on_hold: rekening.saldo_on_hold || 0,
+      saldo_display: Number(rekening.saldo || 0) + Number(rekening.saldo_on_hold || 0),
       nama_rekening: rekening.nama_rekening,
       nama_bank: rekening.bank_id ? (rekening.bank_id as any).nama_bank : rekening.kode_bank
     });

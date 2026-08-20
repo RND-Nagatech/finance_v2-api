@@ -39,6 +39,7 @@ export interface ITtFinanceDetail extends Document {
   posting_version?: number;
   posted_at?: Date | string;
   posting_error?: string;
+  saldo_on_hold_applied?: boolean;
 }
 
 const TtFinanceDetailSchema: Schema = new Schema({
@@ -84,6 +85,7 @@ const TtFinanceDetailSchema: Schema = new Schema({
   posting_version: { type: Number, default: 1, index: true },
   posted_at: { type: Schema.Types.Mixed, default: '-' },
   posting_error: { type: String, default: '-' },
+  saldo_on_hold_applied: { type: Boolean, default: false, index: true },
 });
 
 export default mongoose.model<ITtFinanceDetail>('tt_finance_detail', TtFinanceDetailSchema);
