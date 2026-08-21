@@ -12,6 +12,12 @@ import Perusahaan from '../models/Perusahaan';
 import Bank from '../models/Bank';
 import { AuthRequest } from '../middleware/authMiddleware';
 import { deriveTahunFiskalFromBulanV2, rebuildSummaryV2ForDetail, shouldEnterSummaryV2 } from '../services/summaryV2Service';
+import {
+  applyAssetMovementFromTransaction,
+  isAssetSource,
+  resolveAssetSnapshot,
+  rollbackAssetMovementFromTransaction,
+} from '../services/assetLedgerService';
 
 function escapeRegex(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -109,6 +115,7 @@ function isFinanceOnlyTransaction(doc: any): boolean {
 }
 
 function shouldAffectRekening(doc: any): boolean {
+  if (isAssetSource(doc)) return false;
   return !isFinanceOnlyTransaction(doc);
 }
 
@@ -678,6 +685,7 @@ export const validateAttachment = async (req: Request, res: Response, next: Next
 
       const validatorBy = user?.username || user?.email || user?._id || 'SYSTEM';
       const validatorAt = new Date();
+      await applyAssetMovementFromTransaction(doc, String(validatorBy), session);
       doc.is_validated = true;
       doc.saldo_on_hold_applied = false;
       doc.validator_notes = validator_notes && String(validator_notes).trim() !== '' ? String(validator_notes) : '-';
@@ -747,6 +755,9 @@ export const deleteTransaksi = async (req: AuthRequest, res: Response, next: Nex
         await incrementRekeningBalance(txDetail, { saldo: -saldoDelta }, session);
       } else if (!txDetail.is_validated) {
         await releaseSaldoOnHoldForPendingDetail(txDetail, session);
+      }
+      if (txDetail.is_validated) {
+        await rollbackAssetMovementFromTransaction(txDetail, deleteActor, session);
       }
 
       // Soft delete: set status_deleted, deleted_at, deleted_by
@@ -820,7 +831,7 @@ export const deleteAttachment = async (req: Request, res: Response, next: NextFu
 
 export const createTransaksi = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { kategori, sub_kategori, akun, bulan, nilai, input_by, tahun_fiskal, tanggal, keterangan, kode_perusahaan, nama_perusahaan, kode_bank, no_rekening, is_special_transaction, transaction_mode, status_final, split_dana } = req.body;
+    const { kategori, sub_kategori, akun, bulan, nilai, input_by, tahun_fiskal, tanggal, keterangan, kode_perusahaan, nama_perusahaan, kode_bank, no_rekening, is_special_transaction, transaction_mode, status_final, split_dana, source_type, asset_id, asset_qty } = req.body;
     if (!kategori || !sub_kategori || !akun || !bulan || nilai === undefined) {
       return res.status(400).json({ message: 'kategori, sub_kategori, akun, bulan, nilai required' });
     }
@@ -905,6 +916,15 @@ export const createTransaksi = async (req: Request, res: Response, next: NextFun
     if (!tanggal) {
       return res.status(400).json({ message: 'tanggal (tanggal transaksi) wajib diisi' });
     }
+    const sourceType = String(source_type || 'REKENING').toUpperCase() === 'ASSET' ? 'ASSET' : 'REKENING';
+    let assetSnapshot: Awaited<ReturnType<typeof resolveAssetSnapshot>> | null = null;
+    if (sourceType === 'ASSET') {
+      const qty = Number(asset_qty || 0);
+      if (!asset_id || !Number.isFinite(qty) || qty <= 0) {
+        return res.status(400).json({ message: 'asset_id dan asset_qty wajib diisi untuk transaksi asset.' });
+      }
+      assetSnapshot = await resolveAssetSnapshot(String(asset_id));
+    }
     const hasSplitDana = splitDana.length > 0;
     const sourceTransactionMode = hasSplitDana ? 'SPECIAL' : transactionMode;
     const detail = new TtFinanceDetail({
@@ -919,9 +939,15 @@ export const createTransaksi = async (req: Request, res: Response, next: NextFun
       created_at: new Date(),
       kode_perusahaan: kode_perusahaan || '',
       nama_perusahaan: nama_perusahaan || '',
-      kode_bank: kode_bank && kode_bank.trim() !== '' ? kode_bank : '-',
-      no_rekening: no_rekening && no_rekening.trim() !== '' ? no_rekening : '-',
-      source_type: 'REKENING',
+      kode_bank: sourceType === 'ASSET' ? '-' : (kode_bank && kode_bank.trim() !== '' ? kode_bank : '-'),
+      no_rekening: sourceType === 'ASSET' ? '-' : (no_rekening && no_rekening.trim() !== '' ? no_rekening : '-'),
+      source_type: sourceType,
+      asset_id: sourceType === 'ASSET' ? assetSnapshot?.asset._id : undefined,
+      asset_code: sourceType === 'ASSET' ? assetSnapshot?.asset_code : undefined,
+      asset_name: sourceType === 'ASSET' ? assetSnapshot?.asset_name : undefined,
+      asset_qty: sourceType === 'ASSET' ? Number(asset_qty) : undefined,
+      asset_unit: sourceType === 'ASSET' ? assetSnapshot?.unit : undefined,
+      asset_unit_price_snapshot: sourceType === 'ASSET' ? assetSnapshot?.current_price : undefined,
       status_final: status_final === undefined ? true : Boolean(status_final),
       tahun_fiskal,
       is_special_transaction: sourceTransactionMode === 'SPECIAL',
@@ -1175,7 +1201,7 @@ export const listTransaksi = async (req: Request, res: Response, next: NextFunct
 export const updateTransaksi = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-    const { kategori, sub_kategori, akun, bulan, nilai, input_by, tahun_fiskal, tanggal, keterangan, kode_perusahaan, nama_perusahaan, kode_bank, no_rekening, is_special_transaction, transaction_mode, status_final, rekening_mutation_direction } = req.body;
+    const { kategori, sub_kategori, akun, bulan, nilai, input_by, tahun_fiskal, tanggal, keterangan, kode_perusahaan, nama_perusahaan, kode_bank, no_rekening, is_special_transaction, transaction_mode, status_final, rekening_mutation_direction, source_type, asset_id, asset_qty } = req.body;
     // Cari detail transaksi di tt_finance_detail
     const detail = await TtFinanceDetail.findById(id);
     if (!detail) return res.status(404).json({ message: 'Transaksi detail not found' });
@@ -1217,6 +1243,16 @@ export const updateTransaksi = async (req: Request, res: Response, next: NextFun
       transaction_mode ?? detail.transaction_mode,
       is_special_transaction ?? detail.is_special_transaction
     );
+    const newSourceType = String(source_type || detail.source_type || 'REKENING').toUpperCase() === 'ASSET' ? 'ASSET' : 'REKENING';
+    let assetSnapshot: Awaited<ReturnType<typeof resolveAssetSnapshot>> | null = null;
+    if (newSourceType === 'ASSET') {
+      const qty = Number(asset_qty !== undefined ? asset_qty : detail.asset_qty || 0);
+      const targetAssetId = asset_id || detail.asset_id;
+      if (!targetAssetId || !Number.isFinite(qty) || qty <= 0) {
+        return res.status(400).json({ message: 'asset_id dan asset_qty wajib diisi untuk transaksi asset.' });
+      }
+      assetSnapshot = await resolveAssetSnapshot(String(targetAssetId));
+    }
 
     // Hitung tahun fiskal dari bulan baru
     let tahunFiskal = tahun_fiskal;
@@ -1240,9 +1276,15 @@ export const updateTransaksi = async (req: Request, res: Response, next: NextFun
       created_at: new Date(),
       kode_perusahaan: kode_perusahaan || '',
       nama_perusahaan: nama_perusahaan || '',
-      kode_bank: kode_bank && kode_bank.trim() !== '' ? kode_bank : '-',
-      no_rekening: no_rekening && no_rekening.trim() !== '' ? no_rekening : '-',
-      source_type: 'REKENING',
+      kode_bank: newSourceType === 'ASSET' ? '-' : (kode_bank && kode_bank.trim() !== '' ? kode_bank : '-'),
+      no_rekening: newSourceType === 'ASSET' ? '-' : (no_rekening && no_rekening.trim() !== '' ? no_rekening : '-'),
+      source_type: newSourceType,
+      asset_id: newSourceType === 'ASSET' ? assetSnapshot?.asset._id : undefined,
+      asset_code: newSourceType === 'ASSET' ? assetSnapshot?.asset_code : undefined,
+      asset_name: newSourceType === 'ASSET' ? assetSnapshot?.asset_name : undefined,
+      asset_qty: newSourceType === 'ASSET' ? Number(asset_qty !== undefined ? asset_qty : detail.asset_qty || 0) : undefined,
+      asset_unit: newSourceType === 'ASSET' ? assetSnapshot?.unit : undefined,
+      asset_unit_price_snapshot: newSourceType === 'ASSET' ? assetSnapshot?.current_price : undefined,
       status_final: status_final === undefined ? (detail.status_final !== false) : Boolean(status_final),
       tahun_fiskal: tahunFiskal,
       is_special_transaction: newTransactionMode === 'SPECIAL',

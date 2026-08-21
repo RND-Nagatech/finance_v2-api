@@ -13,11 +13,17 @@ import perusahaanRoutes from './routes/perusahaanRoutes';
 import fiscalRoutes from './routes/fiscalRoutes';
 import userRoutes from './routes/userRoutes';
 import summaryV2Routes from './routes/summaryV2Routes';
+import assetRoutes from './routes/assetRoutes';
 import { errorLoggerMiddleware } from './middleware/errorLoggerMiddleware';
 
 // Import models to ensure they are registered with Mongoose
 import './models/TtFinanceDetail';
 import './models/TtSummaryV2';
+import './models/Asset';
+import './models/AssetType';
+import './models/AssetTypePriceHistory';
+import './models/AssetLedger';
+import './models/AssetTransfer';
 
 const app = express();
 const PORT = process.env.PORT || 5103;
@@ -64,6 +70,7 @@ app.use('/api/master/perusahaan', perusahaanRoutes);
 app.use('/api/fiscal', fiscalRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/summary-v2', summaryV2Routes);
+app.use('/api', assetRoutes);
 
 // Error logging middleware
 app.use(errorLoggerMiddleware);

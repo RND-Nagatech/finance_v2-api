@@ -33,7 +33,13 @@ export interface ITtFinanceDetail extends Document {
   nama_perusahaan?: string;
   kode_bank?: string;
   no_rekening?: string;
-  source_type?: 'REKENING';
+  source_type?: 'REKENING' | 'ASSET';
+  asset_id?: mongoose.Types.ObjectId;
+  asset_code?: string;
+  asset_name?: string;
+  asset_qty?: number;
+  asset_unit?: string;
+  asset_unit_price_snapshot?: number;
   is_special_transaction?: boolean;
   transaction_mode?: 'NORMAL' | 'SPECIAL' | 'FINANCE_ONLY';
   rekening_mutation_direction?: 'IN' | 'OUT';
@@ -66,7 +72,13 @@ const TtFinanceDetailSchema: Schema = new Schema({
   nama_perusahaan: { type: String },
   kode_bank: { type: String },
   no_rekening: { type: String },
-  source_type: { type: String, enum: ['REKENING'], default: 'REKENING', index: true },
+  source_type: { type: String, enum: ['REKENING', 'ASSET'], default: 'REKENING', index: true },
+  asset_id: { type: Schema.Types.ObjectId, ref: 'Asset', index: true },
+  asset_code: { type: String },
+  asset_name: { type: String },
+  asset_qty: { type: Number },
+  asset_unit: { type: String },
+  asset_unit_price_snapshot: { type: Number },
   is_special_transaction: { type: Boolean, default: false, index: true },
   transaction_mode: {
     type: String,
