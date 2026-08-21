@@ -36,6 +36,7 @@ export interface ITtFinanceDetail extends Document {
   source_type?: 'REKENING';
   is_special_transaction?: boolean;
   transaction_mode?: 'NORMAL' | 'SPECIAL' | 'FINANCE_ONLY';
+  rekening_mutation_direction?: 'IN' | 'OUT';
   posting_state?: PostingState;
   posting_version?: number;
   posted_at?: Date | string;
@@ -71,6 +72,11 @@ const TtFinanceDetailSchema: Schema = new Schema({
     type: String,
     enum: ['NORMAL', 'SPECIAL', 'FINANCE_ONLY'],
     default: 'NORMAL',
+    index: true,
+  },
+  rekening_mutation_direction: {
+    type: String,
+    enum: ['IN', 'OUT'],
     index: true,
   },
   attachments: { type: [{ path: { type: String, required: true } }], default: [] },

@@ -121,6 +121,9 @@ function getRekeningBalanceDelta(doc: any): number {
 
   const nilai = Number(doc?.nilai || 0);
   if (!Number.isFinite(nilai) || nilai === 0) return 0;
+  const mutationDirection = String(doc?.rekening_mutation_direction || '').toUpperCase();
+  if (mutationDirection === 'IN') return nilai;
+  if (mutationDirection === 'OUT') return -nilai;
   return doc?.kategori === 'PENDAPATAN' ? nilai : -nilai;
 }
 
@@ -817,7 +820,7 @@ export const deleteAttachment = async (req: Request, res: Response, next: NextFu
 
 export const createTransaksi = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { kategori, sub_kategori, akun, bulan, nilai, input_by, tahun_fiskal, tanggal, keterangan, kode_perusahaan, nama_perusahaan, kode_bank, no_rekening, is_special_transaction, transaction_mode, status_final } = req.body;
+    const { kategori, sub_kategori, akun, bulan, nilai, input_by, tahun_fiskal, tanggal, keterangan, kode_perusahaan, nama_perusahaan, kode_bank, no_rekening, is_special_transaction, transaction_mode, status_final, split_dana } = req.body;
     if (!kategori || !sub_kategori || !akun || !bulan || nilai === undefined) {
       return res.status(400).json({ message: 'kategori, sub_kategori, akun, bulan, nilai required' });
     }
@@ -868,12 +871,42 @@ export const createTransaksi = async (req: Request, res: Response, next: NextFun
       return res.status(400).json({ message: 'tahun_fiskal tidak ditemukan dari bulan' });
     }
     const transactionMode = normalizeTransactionMode(transaction_mode, is_special_transaction);
+    const splitDana = Array.isArray(split_dana) ? split_dana : [];
+    const totalSplitDana = splitDana.reduce((sum: number, item: any) => sum + Number(item?.nominal || 0), 0);
+    if (splitDana.length > 0) {
+      if (!kode_bank || !no_rekening) {
+        return res.status(400).json({ message: 'Rekening sumber wajib dipilih untuk split dana.' });
+      }
+      if (totalSplitDana <= 0) {
+        return res.status(400).json({ message: 'Total split dana harus lebih besar dari 0.' });
+      }
+      if (totalSplitDana > Number(nilai || 0)) {
+        return res.status(400).json({ message: 'Total split dana tidak boleh melebihi nilai transaksi sumber.' });
+      }
+      const invalidSplit = splitDana.find((item: any) =>
+        !item?.kode_bank ||
+        !item?.no_rekening ||
+        !item?.keluar_kategori ||
+        !item?.keluar_sub_kategori ||
+        !item?.keluar_akun ||
+        !item?.masuk_kategori ||
+        !item?.masuk_sub_kategori ||
+        !item?.masuk_akun ||
+        Number(item?.nominal || 0) <= 0 ||
+        (String(item.kode_bank) === String(kode_bank) && String(item.no_rekening) === String(no_rekening))
+      );
+      if (invalidSplit) {
+        return res.status(400).json({ message: 'Setiap split wajib punya rekening tujuan berbeda, nominal, dan kategori/sub kategori/akun keluar-masuk.' });
+      }
+    }
 
     // Simpan detail transaksi ke tt_finance_detail
     // tanggal HARUS diambil dari input (bukan tanggal input), dan WAJIB ADA
     if (!tanggal) {
       return res.status(400).json({ message: 'tanggal (tanggal transaksi) wajib diisi' });
     }
+    const hasSplitDana = splitDana.length > 0;
+    const sourceTransactionMode = hasSplitDana ? 'SPECIAL' : transactionMode;
     const detail = new TtFinanceDetail({
       tanggal: tanggal,
       bulan,
@@ -891,23 +924,118 @@ export const createTransaksi = async (req: Request, res: Response, next: NextFun
       source_type: 'REKENING',
       status_final: status_final === undefined ? true : Boolean(status_final),
       tahun_fiskal,
-      is_special_transaction: transactionMode === 'SPECIAL',
-      transaction_mode: transactionMode,
+      is_special_transaction: sourceTransactionMode === 'SPECIAL',
+      transaction_mode: sourceTransactionMode,
+      rekening_mutation_direction: hasSplitDana ? 'IN' : undefined,
       posting_state: 'NOT_APPLIED',
       posting_version: POSTING_VERSION,
       posted_at: '-',
       posting_error: '-',
     });
 
+    const splitDetails: any[] = [];
     await runMongoTransaction(async (session) => {
       await detail.save({ session });
       await applySaldoOnHoldForPendingDetail(detail, session);
       if (detail.isModified('saldo_on_hold_applied')) {
         await detail.save({ session });
       }
+
+      for (const item of splitDana) {
+        const nominal = Number(item.nominal || 0);
+        const targetLabel = [item.kode_bank, item.no_rekening].filter(Boolean).join(' - ');
+        const splitBase = {
+          tanggal,
+          bulan,
+          created_by: input_by,
+          created_at: new Date(),
+          source_type: 'REKENING',
+          status_final: status_final === undefined ? true : Boolean(status_final),
+          tahun_fiskal,
+          is_special_transaction: true,
+          transaction_mode: 'SPECIAL',
+          posting_state: 'NOT_APPLIED',
+          posting_version: POSTING_VERSION,
+          posted_at: '-',
+          posting_error: '-',
+        };
+
+        const keluar = new TtFinanceDetail({
+          ...splitBase,
+          rekening_mutation_direction: 'OUT',
+          kategori: String(item.keluar_kategori || '').toUpperCase(),
+          sub_kategori: String(item.keluar_sub_kategori || '').toUpperCase(),
+          akun: String(item.keluar_akun || '').toUpperCase(),
+          nilai: nominal,
+          keterangan: `SPLIT DANA KE ${String(targetLabel || item.nama_rekening || '').toUpperCase()}`,
+          kode_perusahaan: kode_perusahaan || '',
+          nama_perusahaan: nama_perusahaan || '',
+          kode_bank,
+          no_rekening,
+        });
+
+        const masuk = new TtFinanceDetail({
+          ...splitBase,
+          is_special_transaction: false,
+          transaction_mode: 'NORMAL',
+          rekening_mutation_direction: 'IN',
+          kategori: String(item.masuk_kategori || '').toUpperCase(),
+          sub_kategori: String(item.masuk_sub_kategori || '').toUpperCase(),
+          akun: String(item.masuk_akun || '').toUpperCase(),
+          nilai: nominal,
+          keterangan: item.keterangan && String(item.keterangan).trim() !== ''
+            ? String(item.keterangan).toUpperCase()
+            : `SPLIT DANA DARI ${String(kode_bank || '')} - ${String(no_rekening || '')}`,
+          kode_perusahaan: item.kode_perusahaan || '',
+          nama_perusahaan: item.nama_perusahaan || '',
+          kode_bank: item.kode_bank,
+          no_rekening: item.no_rekening,
+        });
+
+        for (const splitDetail of [keluar, masuk]) {
+          await splitDetail.save({ session });
+          await applySaldoOnHoldForPendingDetail(splitDetail, session);
+          if (splitDetail.isModified('saldo_on_hold_applied')) {
+            await splitDetail.save({ session });
+          }
+          splitDetails.push(splitDetail);
+        }
+      }
+
+      const sisaSplitDana = Number(nilai || 0) - totalSplitDana;
+      if (hasSplitDana && sisaSplitDana > 0) {
+        const remainder = new TtFinanceDetail({
+          tanggal,
+          bulan,
+          kategori,
+          sub_kategori,
+          akun,
+          nilai: sisaSplitDana,
+          keterangan: keterangan && keterangan.trim() !== ''
+            ? `${keterangan.toUpperCase()} - SISA SPLIT DANA`
+            : 'SISA SPLIT DANA',
+          created_by: input_by,
+          created_at: new Date(),
+          kode_perusahaan: kode_perusahaan || '',
+          nama_perusahaan: nama_perusahaan || '',
+          kode_bank: '-',
+          no_rekening: '-',
+          source_type: 'REKENING',
+          status_final: status_final === undefined ? true : Boolean(status_final),
+          tahun_fiskal,
+          is_special_transaction: false,
+          transaction_mode: 'FINANCE_ONLY',
+          posting_state: 'NOT_APPLIED',
+          posting_version: POSTING_VERSION,
+          posted_at: '-',
+          posting_error: '-',
+        });
+        await remainder.save({ session });
+        splitDetails.push(remainder);
+      }
     });
 
-    res.json(detail);
+    res.json({ ...detail.toObject(), split_details: splitDetails.map((item) => item.toObject()) });
   } catch (error) {
     next(error);
   }
@@ -1047,7 +1175,7 @@ export const listTransaksi = async (req: Request, res: Response, next: NextFunct
 export const updateTransaksi = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-    const { kategori, sub_kategori, akun, bulan, nilai, input_by, tahun_fiskal, tanggal, keterangan, kode_perusahaan, nama_perusahaan, kode_bank, no_rekening, is_special_transaction, transaction_mode, status_final } = req.body;
+    const { kategori, sub_kategori, akun, bulan, nilai, input_by, tahun_fiskal, tanggal, keterangan, kode_perusahaan, nama_perusahaan, kode_bank, no_rekening, is_special_transaction, transaction_mode, status_final, rekening_mutation_direction } = req.body;
     // Cari detail transaksi di tt_finance_detail
     const detail = await TtFinanceDetail.findById(id);
     if (!detail) return res.status(404).json({ message: 'Transaksi detail not found' });
@@ -1119,6 +1247,7 @@ export const updateTransaksi = async (req: Request, res: Response, next: NextFun
       tahun_fiskal: tahunFiskal,
       is_special_transaction: newTransactionMode === 'SPECIAL',
       transaction_mode: newTransactionMode,
+      rekening_mutation_direction: rekening_mutation_direction || detail.rekening_mutation_direction,
       attachments: detail.attachments && detail.attachments.length > 0 ? [...detail.attachments] : [],
       posting_state: 'NOT_APPLIED',
       posting_version: POSTING_VERSION,

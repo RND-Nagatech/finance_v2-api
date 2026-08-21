@@ -45,6 +45,9 @@ const getPendingRekeningDelta = (doc: any): number => {
 
   const nilai = Number(doc?.nilai || 0);
   if (!Number.isFinite(nilai) || nilai === 0) return 0;
+  const mutationDirection = String(doc?.rekening_mutation_direction || '').toUpperCase();
+  if (mutationDirection === 'IN') return nilai;
+  if (mutationDirection === 'OUT') return -nilai;
   return doc?.kategori === 'PENDAPATAN' ? nilai : -nilai;
 };
 
