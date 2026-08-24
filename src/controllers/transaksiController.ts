@@ -1600,6 +1600,9 @@ export const updateStatusFinal = async (req: Request, res: Response, next: NextF
     if (doc.status_deleted === true) {
       return res.status(400).json({ message: 'Transaksi yang sudah dihapus tidak bisa diubah status finalnya.' });
     }
+    if (doc.is_validated === true) {
+      return res.status(400).json({ message: 'Transaksi sudah divalidasi dan status final tidak bisa diubah.' });
+    }
 
     const fiscalYear = deriveTahunFiskalFromDetail(doc);
     if (await isFiscalYearClosed(fiscalYear)) {
