@@ -48,6 +48,7 @@ export interface ITtFinanceDetail extends Document {
   posted_at?: Date | string;
   posting_error?: string;
   saldo_on_hold_applied?: boolean;
+  perjalanan_dinas_id?: mongoose.Types.ObjectId;
 }
 
 const TtFinanceDetailSchema: Schema = new Schema({
@@ -106,6 +107,7 @@ const TtFinanceDetailSchema: Schema = new Schema({
   posted_at: { type: Schema.Types.Mixed, default: '-' },
   posting_error: { type: String, default: '-' },
   saldo_on_hold_applied: { type: Boolean, default: false, index: true },
+  perjalanan_dinas_id: { type: Schema.Types.ObjectId, ref: 'PerjalananDinas', index: true },
 });
 
 export default mongoose.model<ITtFinanceDetail>('tt_finance_detail', TtFinanceDetailSchema);

@@ -14,6 +14,7 @@ import fiscalRoutes from './routes/fiscalRoutes';
 import userRoutes from './routes/userRoutes';
 import summaryV2Routes from './routes/summaryV2Routes';
 import assetRoutes from './routes/assetRoutes';
+import perjalananDinasRoutes from './routes/perjalananDinasRoutes';
 import { errorLoggerMiddleware } from './middleware/errorLoggerMiddleware';
 
 // Import models to ensure they are registered with Mongoose
@@ -24,6 +25,9 @@ import './models/AssetType';
 import './models/AssetTypePriceHistory';
 import './models/AssetLedger';
 import './models/AssetTransfer';
+import './models/PerjalananDinas';
+import './models/PerjalananDinasDetail';
+import './models/PerjalananDinasDana';
 
 const app = express();
 const PORT = process.env.PORT || 5103;
@@ -71,6 +75,7 @@ app.use('/api/fiscal', fiscalRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/summary-v2', summaryV2Routes);
 app.use('/api', assetRoutes);
+app.use('/api/perjalanan-dinas', perjalananDinasRoutes);
 
 // Error logging middleware
 app.use(errorLoggerMiddleware);

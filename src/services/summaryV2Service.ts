@@ -216,7 +216,7 @@ export async function rebuildSummaryV2ForKey(key: SummaryV2Key, session?: Client
   const { total, count } = await calculateTotalForKey(key, session);
   const filter = summaryFilter(key);
 
-  if (count <= 0 || total <= 0) {
+  if (count <= 0 || total === 0) {
     await TtSummaryV2.deleteOne(filter).session(session || null);
     return { key, total_nilai: 0, transaction_count: 0, deleted: true };
   }
