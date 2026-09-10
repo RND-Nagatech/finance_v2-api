@@ -16,6 +16,8 @@ import summaryV2Routes from './routes/summaryV2Routes';
 import assetRoutes from './routes/assetRoutes';
 import perjalananDinasRoutes from './routes/perjalananDinasRoutes';
 import { errorLoggerMiddleware } from './middleware/errorLoggerMiddleware';
+import agentRoutes from './agent-api/routes/agentRoutes';
+import { agentDocs, agentOpenApi } from './agent-api/agentController';
 
 // Import models to ensure they are registered with Mongoose
 import './models/TtFinanceDetail';
@@ -76,6 +78,9 @@ app.use('/api/users', userRoutes);
 app.use('/api/summary-v2', summaryV2Routes);
 app.use('/api', assetRoutes);
 app.use('/api/perjalanan-dinas', perjalananDinasRoutes);
+app.use('/api/agent/v1', agentRoutes);
+app.get('/api/agent/openapi.json', agentOpenApi);
+app.get('/api/agent/docs', agentDocs);
 
 // Error logging middleware
 app.use(errorLoggerMiddleware);

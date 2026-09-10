@@ -9,6 +9,7 @@
     "sync-indexes": "ts-node src/scripts/sync_indexes.ts",
     "ensure-summary-index": "ts-node src/scripts/ensure_summary_v2_unique_index.ts",
     "test:mongo-transaction": "ts-node src/scripts/test_validate_attachment_transaction.ts",
+    "test:agent-contract": "ts-node src/agent-api/contractSmoke.ts",
     "build": "tsc -p .",
     "start": "node dist/server.js"
   },

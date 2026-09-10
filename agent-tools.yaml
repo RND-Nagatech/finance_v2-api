@@ -1,0 +1,89 @@
+version: "1.0"
+service:
+  id: finance
+  name: Finance Transaction API
+  base_path: /api/agent/v1
+  mode: read-only
+  auth:
+    type: bearer-jwt
+    audience_env: AGENT_SERVICE_AUDIENCE
+    scopes:
+      - agent:finance:read
+      - agent:travel:read
+      - agent:asset:read
+tools:
+  - name: finance.summary
+    method: GET
+    path: /finance/summary
+    scope: agent:finance:read
+    risk: read
+  - name: finance.revenue
+    method: GET
+    path: /finance/revenue
+    scope: agent:finance:read
+    risk: read
+  - name: finance.expenses
+    method: GET
+    path: /finance/expenses
+    scope: agent:finance:read
+    risk: read
+  - name: finance.profit-loss
+    method: GET
+    path: /finance/profit-loss
+    scope: agent:finance:read
+    risk: read
+  - name: finance.transactions.list
+    method: GET
+    path: /finance/transactions
+    scope: agent:finance:read
+    risk: read
+  - name: finance.transactions.get
+    method: GET
+    path: /finance/transactions/{id}
+    scope: agent:finance:read
+    risk: read
+  - name: business-travel.list
+    method: GET
+    path: /business-travel
+    scope: agent:travel:read
+    risk: read
+  - name: business-travel.get
+    method: GET
+    path: /business-travel/{id}
+    scope: agent:travel:read
+    risk: read
+  - name: business-travel.summary
+    method: GET
+    path: /business-travel/{id}/summary
+    scope: agent:travel:read
+    risk: read
+  - name: business-travel.status-summary
+    method: GET
+    path: /business-travel/status-summary
+    scope: agent:travel:read
+    risk: read
+  - name: business-travel.expenses
+    method: GET
+    path: /business-travel/{id}/expenses
+    scope: agent:travel:read
+    risk: read
+  - name: assets.list
+    method: GET
+    path: /assets
+    scope: agent:asset:read
+    risk: read
+  - name: assets.summary
+    method: GET
+    path: /assets/summary
+    scope: agent:asset:read
+    risk: read
+  - name: assets.get
+    method: GET
+    path: /assets/{id}
+    scope: agent:asset:read
+    risk: read
+  - name: assets.ledger
+    method: GET
+    path: /assets/{id}/ledger
+    scope: agent:asset:read
+    risk: read
