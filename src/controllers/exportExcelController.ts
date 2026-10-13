@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import ExcelJS from 'exceljs';
 import TtFinanceDetail from '../models/TtFinanceDetail';
 import TtSummaryV2 from '../models/TtSummaryV2';
+import { applyTransactionVisibilityFilter, canViewAllTransactions } from '../utils/transactionVisibility';
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -92,6 +93,9 @@ export const exportTransaksiExcel = async (req: Request, res: Response) => {
     let header: string[] = [];
 
     if (doFlatten) {
+      if (!canViewAllTransactions(req)) {
+        rows = [];
+      }
       const filterAgg: any = { period_type: 'MONTHLY' };
       if (tahun) filterAgg.tahun_fiskal = buildSummaryYearMatchValue(tahun);
       if (kategori) filterAgg.kategori = kategori;
@@ -148,7 +152,7 @@ export const exportTransaksiExcel = async (req: Request, res: Response) => {
         { $sort: sortStage },
         { $limit: limit }
       ];
-      if (rows.length === 0 && !(input_by || (special_type && special_type !== 'NORMAL' && special_type !== 'ALL'))) {
+      if (rows.length === 0 && canViewAllTransactions(req) && !(input_by || (special_type && special_type !== 'NORMAL' && special_type !== 'ALL'))) {
         rows = await TtSummaryV2.aggregate(pipeline).allowDiskUse(true).exec();
       }
       // Rekap tidak perlu kolom Input By
@@ -162,7 +166,7 @@ export const exportTransaksiExcel = async (req: Request, res: Response) => {
       if (kategori) filter.kategori = kategori;
       if (sub_kategori) filter.sub_kategori = sub_kategori;
       if (akun) filter.akun = akun;
-      if (input_by) filter.input_by = input_by;
+      if (input_by) filter.created_by = input_by;
       if (special_type === 'SPECIAL') {
         andFilters.push({
           $or: [
@@ -200,6 +204,7 @@ export const exportTransaksiExcel = async (req: Request, res: Response) => {
       if (andFilters.length > 0) {
         filter.$and = andFilters;
       }
+      applyTransactionVisibilityFilter(req, filter);
       let sort: any = {};
       if (sortKategori === 'asc') sort.kategori = 1;
       if (sortKategori === 'desc') sort.kategori = -1;

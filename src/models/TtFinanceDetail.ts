@@ -16,6 +16,7 @@ export interface ITtFinanceDetail extends Document {
   nilai: number;
   keterangan?: string;
   created_by: string;
+  input_user_id?: string | null;
   created_at: Date;
   updated_by?: string;
   updated_at?: Date;
@@ -62,6 +63,7 @@ const TtFinanceDetailSchema: Schema = new Schema({
   nilai: { type: Number, required: true },
   keterangan: { type: String },
   created_by: { type: String, required: true },
+  input_user_id: { type: String, default: null, index: true },
   created_at: { type: Date, required: true, default: Date.now },
   updated_by: { type: String },
   updated_at: { type: Date },

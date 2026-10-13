@@ -12,8 +12,10 @@ import SubKategori from '../models/SubKategori';
 import Akun from '../models/Akun';
 import TtFinanceDetail from '../models/TtFinanceDetail';
 import { deriveTahunFiskalFromBulanV2 } from '../services/summaryV2Service';
+import { resolveTransactionOwnerId } from '../utils/transactionVisibility';
 
 type ReqUser = {
+  userId?: string;
   id?: string;
   _id?: string;
   username?: string;
@@ -65,7 +67,7 @@ function getActorName(req: Request): string {
 
 function getActorId(req: Request): string {
   const u = getReqUser(req);
-  return String(u.id || u._id || u.username || '');
+  return String(u.userId || u.id || u._id || u.username || '');
 }
 
 function isOfficeRole(req: Request): boolean {
@@ -173,6 +175,7 @@ async function createInjectFinanceDetailDraft(params: {
   kode_bank?: string;
   no_rekening?: string;
   actor: string;
+  input_user_id?: string;
   now?: Date;
 }) {
   const now = params.now || new Date();
@@ -194,6 +197,7 @@ async function createInjectFinanceDetailDraft(params: {
       : `INJECT DANA PERJALANAN ${params.header.kode_perjalanan} - ${params.header.tujuan} - ${params.header.user_name}`
     ).toUpperCase(),
     created_by: params.actor,
+    input_user_id: params.input_user_id || null,
     created_at: now,
     is_validated: false,
     kode_perusahaan: params.kode_perusahaan || '',
@@ -214,6 +218,7 @@ async function createRealisasiFinanceDetailDraft(params: {
   sub_kategori?: string;
   akun?: string;
   actor: string;
+  input_user_id?: string;
   tanggal?: string;
   keterangan?: string;
   kode_perusahaan?: string;
@@ -241,6 +246,7 @@ async function createRealisasiFinanceDetailDraft(params: {
       : `REALISASI DANA PERJALANAN ${params.header.kode_perjalanan} - ${params.header.tujuan} - ${params.header.user_name}`
     ).toUpperCase(),
     created_by: params.actor,
+    input_user_id: params.input_user_id || null,
     created_at: now,
     is_validated: false,
     kode_perusahaan: params.kode_perusahaan || '',
@@ -944,6 +950,7 @@ async function createDanaLedger(req: Request, res: Response, jenis: 'INJECT' | '
         kode_bank: rekening.kode_bank || '-',
         no_rekening: rekening.no_rekening || '-',
         actor: getActorName(req),
+        input_user_id: resolveTransactionOwnerId(req),
         now,
       });
       injectDetail = created.detail;
@@ -1128,6 +1135,7 @@ export const postPerjalananToTtFinance = async (req: Request, res: Response, nex
         sub_kategori: String(snap.sub_kategori),
         akun: String(snap.akun),
         actor: getActorName(req),
+        input_user_id: resolveTransactionOwnerId(req),
       });
       injectDetail = created.detail;
       (latestInject as any).tt_finance_detail_id = injectDetail._id;
@@ -1165,6 +1173,7 @@ export const postPerjalananToTtFinance = async (req: Request, res: Response, nex
         nama_perusahaan: resolvedPostingTarget.nama_perusahaan,
         kode_bank: resolvedPostingTarget.kode_bank || '-',
         no_rekening: resolvedPostingTarget.no_rekening || '-',
+        input_user_id: resolveTransactionOwnerId(req),
       });
 
       merged = await mergePerjalananAttachmentsIntoTransaksi(String(header._id));

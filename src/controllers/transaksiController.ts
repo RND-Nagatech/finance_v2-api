@@ -18,6 +18,13 @@ import {
   resolveAssetSnapshot,
   rollbackAssetMovementFromTransaction,
 } from '../services/assetLedgerService';
+import {
+  applyTransactionVisibilityFilter,
+  canViewAllTransactions,
+  hasTransactionAccess,
+  resolveTransactionActorName,
+  resolveTransactionOwnerId,
+} from '../utils/transactionVisibility';
 
 function escapeRegex(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -537,6 +544,7 @@ function normalizeImportRow(row: any, rowNumber: number, actor: string) {
     nilai: nilai ?? 0,
     keterangan: row.keterangan && String(row.keterangan).trim() !== '' ? String(row.keterangan).trim().toUpperCase() : '-',
     created_by: String(row.created_by || row.input_by || actor || 'IMPORT').trim(),
+    input_user_id: row.input_user_id ? String(row.input_user_id).trim() : null,
     created_at: createdAt === '-' ? new Date() : createdAt,
     updated_by: row.updated_by || undefined,
     updated_at: parseImportDate(row.updated_at) === '-' ? undefined : parseImportDate(row.updated_at),
@@ -653,6 +661,9 @@ export const validateAttachment = async (req: Request, res: Response, next: Next
     const result = await runMongoTransaction(async (session) => {
       const doc = await TtFinanceDetail.findById(id).session(session);
       if (!doc) return { status: 404, body: { message: 'Transaksi detail not found' } };
+      if (!hasTransactionAccess(req, doc)) {
+        return { status: 403, body: { message: 'Anda tidak punya akses ke transaksi ini.' } };
+      }
 
       if (doc.status_final === false) {
         return { status: 400, body: { message: 'Transaksi belum final dan tidak bisa divalidasi.' } };
@@ -718,6 +729,9 @@ export const deleteTransaksi = async (req: AuthRequest, res: Response, next: Nex
     // Find detail
     const detail = await TtFinanceDetail.findById(id);
     if(!detail) return res.status(404).json({ message: 'Transaksi detail not found' });
+    if (!hasTransactionAccess(req, detail)) {
+      return res.status(403).json({ message: 'Anda tidak punya akses ke transaksi ini.' });
+    }
     const detailFiscalYear = deriveTahunFiskalFromDetail(detail);
     if (await isFiscalYearClosed(detailFiscalYear)) {
       return res.status(400).json({ message: `Tahun fiskal ${detailFiscalYear} sudah ditutup dan transaksi tidak bisa dihapus.` });
@@ -785,6 +799,9 @@ export const uploadAttachments = async (req: Request, res: Response, next: NextF
 
     const doc = await TtFinanceDetail.findById(id);
     if (!doc) return res.status(404).json({ message: 'Transaksi not found' });
+    if (!hasTransactionAccess(req, doc)) {
+      return res.status(403).json({ message: 'Anda tidak punya akses ke transaksi ini.' });
+    }
     const fiscalYear = deriveTahunFiskalFromDetail(doc);
     if (await isFiscalYearClosed(fiscalYear)) {
       return res.status(400).json({ message: `Tahun fiskal ${fiscalYear} sudah ditutup dan lampiran tidak bisa diubah.` });
@@ -811,6 +828,9 @@ export const deleteAttachment = async (req: Request, res: Response, next: NextFu
     const { id, filename } = req.params;
     const doc = await TtFinanceDetail.findById(id);
     if (!doc) return res.status(404).json({ message: 'Transaksi not found' });
+    if (!hasTransactionAccess(req, doc)) {
+      return res.status(403).json({ message: 'Anda tidak punya akses ke transaksi ini.' });
+    }
     const fiscalYear = deriveTahunFiskalFromDetail(doc);
     if (await isFiscalYearClosed(fiscalYear)) {
       return res.status(400).json({ message: `Tahun fiskal ${fiscalYear} sudah ditutup dan lampiran tidak bisa diubah.` });
@@ -881,6 +901,8 @@ export const createTransaksi = async (req: Request, res: Response, next: NextFun
     if (!tahunFiskal) {
       return res.status(400).json({ message: 'tahun_fiskal tidak ditemukan dari bulan' });
     }
+    const actorName = resolveTransactionActorName(req, input_by);
+    const inputUserId = resolveTransactionOwnerId(req);
     const transactionMode = normalizeTransactionMode(transaction_mode, is_special_transaction);
     const splitDana = Array.isArray(split_dana) ? split_dana : [];
     const totalSplitDana = splitDana.reduce((sum: number, item: any) => sum + Number(item?.nominal || 0), 0);
@@ -935,7 +957,8 @@ export const createTransaksi = async (req: Request, res: Response, next: NextFun
       akun,
       nilai,
       keterangan: keterangan && keterangan.trim() !== '' ? keterangan.toUpperCase() : '-',
-      created_by: input_by,
+      created_by: actorName,
+      input_user_id: inputUserId || null,
       created_at: new Date(),
       kode_perusahaan: kode_perusahaan || '',
       nama_perusahaan: nama_perusahaan || '',
@@ -973,7 +996,8 @@ export const createTransaksi = async (req: Request, res: Response, next: NextFun
         const splitBase = {
           tanggal,
           bulan,
-          created_by: input_by,
+          created_by: actorName,
+          input_user_id: inputUserId || null,
           created_at: new Date(),
           source_type: 'REKENING',
           status_final: status_final === undefined ? true : Boolean(status_final),
@@ -1040,7 +1064,8 @@ export const createTransaksi = async (req: Request, res: Response, next: NextFun
           keterangan: keterangan && keterangan.trim() !== ''
             ? `${keterangan.toUpperCase()} - SISA SPLIT DANA`
             : 'SISA SPLIT DANA',
-          created_by: input_by,
+          created_by: actorName,
+          input_user_id: inputUserId || null,
           created_at: new Date(),
           kode_perusahaan: kode_perusahaan || '',
           nama_perusahaan: nama_perusahaan || '',
@@ -1074,6 +1099,9 @@ export const listTransaksi = async (req: Request, res: Response, next: NextFunct
     const limitNum = parseInt(limit as string, 10) || 10;
     const doFlatten = String(flatten) === '1' || String(flatten).toLowerCase() === 'true';
     const filter: any = {};
+    if (!canViewAllTransactions(req)) {
+      return res.json({ data: [], total: 0, totalNilai: 0, page: pageNum, totalPages: 1 });
+    }
     if (tahun) filter.tahun_fiskal = buildSummaryYearMatchValue(tahun);
     if (kategori && kategori !== 'ALL') filter.kategori = kategori;
     if (sub_kategori && sub_kategori !== 'ALL') filter.sub_kategori = sub_kategori;
@@ -1205,6 +1233,9 @@ export const updateTransaksi = async (req: Request, res: Response, next: NextFun
     // Cari detail transaksi di tt_finance_detail
     const detail = await TtFinanceDetail.findById(id);
     if (!detail) return res.status(404).json({ message: 'Transaksi detail not found' });
+    if (!hasTransactionAccess(req, detail)) {
+      return res.status(403).json({ message: 'Anda tidak punya akses ke transaksi ini.' });
+    }
     if (detail.is_validated) {
       return res.status(400).json({ message: 'Transaksi sudah divalidasi, tidak bisa diedit.' });
     }
@@ -1262,6 +1293,8 @@ export const updateTransaksi = async (req: Request, res: Response, next: NextFun
     if (!tahunFiskal) {
       return res.status(400).json({ message: 'Gagal menentukan tahun_fiskal untuk transaksi baru.' });
     }
+    const actorName = resolveTransactionActorName(req, input_by);
+    const inputUserId = detail.input_user_id || resolveTransactionOwnerId(req) || null;
 
     // 2. Create new detail (like add)
     const newDetail = new TtFinanceDetail({
@@ -1272,7 +1305,8 @@ export const updateTransaksi = async (req: Request, res: Response, next: NextFun
       akun: akun || detail.akun,
       nilai: nilai !== undefined ? nilai : detail.nilai,
       keterangan: keterangan && keterangan.trim() !== '' ? keterangan.toUpperCase() : '-',
-      created_by: input_by || detail.created_by,
+      created_by: detail.created_by || actorName,
+      input_user_id: inputUserId,
       created_at: new Date(),
       kode_perusahaan: kode_perusahaan || '',
       nama_perusahaan: nama_perusahaan || '',
@@ -1302,7 +1336,7 @@ export const updateTransaksi = async (req: Request, res: Response, next: NextFun
       // 1. Soft delete old detail
       detail.status_deleted = true;
       detail.deleted_at = new Date();
-      detail.deleted_by = input_by || 'SYSTEM';
+      detail.deleted_by = actorName;
       Object.assign(detail, buildPostingStatePatch({ ...detail.toObject(), status_deleted: true }));
       await detail.save({ session });
 
@@ -1326,6 +1360,8 @@ export const batchCreateTransaksi = async (req: Request, res: Response, next: Ne
     const activeYear = fiscalConfig?.active_year ? Number(fiscalConfig.active_year) : null;
   try {
     const transaksiArray = req.body;
+    const actorName = resolveTransactionActorName(req);
+    const inputUserId = resolveTransactionOwnerId(req);
 
     // Validasi input harus berupa array
     if (!Array.isArray(transaksiArray)) {
@@ -1420,7 +1456,8 @@ export const batchCreateTransaksi = async (req: Request, res: Response, next: Ne
           akun,
           nilai,
           keterangan: keterangan && String(keterangan).trim() !== '' ? String(keterangan).toUpperCase() : '-',
-          created_by: input_by || 'system',
+          created_by: resolveTransactionActorName(req, input_by || actorName),
+          input_user_id: inputUserId || null,
           created_at: new Date(),
           kode_perusahaan: kode_perusahaan || '',
           nama_perusahaan: nama_perusahaan || '',
@@ -1566,6 +1603,9 @@ export const updateValidatorNotes = async (req: Request, res: Response, next: Ne
     if (!id) return res.status(400).json({ message: 'ID is required' });
     const doc = await TtFinanceDetail.findById(id);
     if (!doc) return res.status(404).json({ message: 'Transaksi detail not found' });
+    if (!hasTransactionAccess(req, doc)) {
+      return res.status(403).json({ message: 'Anda tidak punya akses ke transaksi ini.' });
+    }
     const fiscalYear = deriveTahunFiskalFromDetail(doc);
     if (await isFiscalYearClosed(fiscalYear)) {
       return res.status(400).json({ message: `Tahun fiskal ${fiscalYear} sudah ditutup dan catatan validator tidak bisa diubah.` });
@@ -1597,6 +1637,9 @@ export const updateStatusFinal = async (req: Request, res: Response, next: NextF
 
     const doc = await TtFinanceDetail.findById(id);
     if (!doc) return res.status(404).json({ message: 'Transaksi detail not found' });
+    if (!hasTransactionAccess(req, doc)) {
+      return res.status(403).json({ message: 'Anda tidak punya akses ke transaksi ini.' });
+    }
     if (doc.status_deleted === true) {
       return res.status(400).json({ message: 'Transaksi yang sudah dihapus tidak bisa diubah status finalnya.' });
     }

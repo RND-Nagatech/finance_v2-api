@@ -16,7 +16,7 @@ if (!fs.existsSync(uploadDir)) {
 
 const router = Router();
 // Export Excel endpoint
-router.get('/export-excel', exportTransaksiExcel);
+router.get('/export-excel', authenticate, exportTransaksiExcel);
 
 // Validasi data hasil attachment (hanya superuser/corsec)
 router.post('/validate-attachment', authenticate, validateAttachment);
@@ -40,21 +40,21 @@ const importUpload = multer({
   limits: { fileSize: 20 * 1024 * 1024 },
 });
 
-router.get('/tt-finance-detail', listTtFinanceDetail);
+router.get('/tt-finance-detail', authenticate, listTtFinanceDetail);
 
-router.post('/', createTransaksi);
-router.post('/batch', batchCreateTransaksi);
+router.post('/', authenticate, createTransaksi);
+router.post('/batch', authenticate, batchCreateTransaksi);
 router.post('/import-details', authenticate, importUpload.single('file'), importTtFinanceDetails);
 router.post('/import-details/batch', authenticate, importTtFinanceDetailsBatch);
-router.get('/', listTransaksi);
+router.get('/', authenticate, listTransaksi);
 router.put('/:id/status-final', authenticate, updateStatusFinal);
-router.put('/:id', updateTransaksi);
+router.put('/:id', authenticate, updateTransaksi);
 router.delete('/:id', authenticate, deleteTransaksi);
 
 // Attachments
-router.post('/:id/attachments', upload.array('attachments'), uploadAttachments);
+router.post('/:id/attachments', authenticate, upload.array('attachments'), uploadAttachments);
 router.delete('/:id/attachments/:filename', authenticate, deleteAttachment);
 
-router.get('/saldo-rekening', getSaldoRekening);
+router.get('/saldo-rekening', authenticate, getSaldoRekening);
 
 export default router;

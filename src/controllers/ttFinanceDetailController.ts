@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import TtFinanceDetail from '../models/TtFinanceDetail';
+import { applyTransactionVisibilityFilter } from '../utils/transactionVisibility';
 
 function escapeRegex(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -83,6 +84,8 @@ export const listTtFinanceDetail = async (req: Request, res: Response) => {
       }
       filter.$or = orFilters;
     }
+
+    applyTransactionVisibilityFilter(req, filter);
 
     if (doAggregate) {
       const agg = await TtFinanceDetail.aggregate([
