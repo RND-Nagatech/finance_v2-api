@@ -5,6 +5,8 @@ export interface IUser extends Document {
   password: string;
   name?: string;
   role: string;
+  portal_email?: string;
+  portal_user_id?: string;
   createdAt: Date;
   credentials: Array<{
     credentialID: string;
@@ -25,7 +27,9 @@ const UserSchema = new Schema(
     username: { type: String, required: true, unique: true },
     password: { type: String, required: true },
     name: { type: String },
-    role: { type: String, enum: ['superuser', 'admin', 'finance', 'corsec', 'user'], default: 'user' },
+    role: { type: String, enum: ['superuser', 'admin', 'finance', 'finance_input', 'corsec', 'user'], default: 'user' },
+    portal_email: { type: String, default: '', trim: true, lowercase: true, index: true },
+    portal_user_id: { type: String, default: '', index: true },
     credentials: [CredentialSchema],
     currentChallenge: { type: String },
   },

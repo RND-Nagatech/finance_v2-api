@@ -18,15 +18,17 @@ export function normalizeTransactionVisibility(value: any): 'own_only' | 'all' {
 
 export function canViewAllTransactions(req: Request): boolean {
   const user = (req as any).user || {};
-  const role = String(user.role || '').toLowerCase();
-  const visibility = user.transaction_visibility ?? user.transactionVisibility;
-  return role === 'superuser' || normalizeTransactionVisibility(visibility) === 'all';
+  const role = String(user.finance_role || user.role || '').toLowerCase();
+  return role !== 'finance_input';
 }
 
 export function getTransactionOwnerValues(req: Request): string[] {
   const user = (req as any).user || {};
   return cleanValues([
     user.userId,
+    user.portal_user_id,
+    user.portal_email,
+    user.finance_user_id,
     user.id,
     user._id,
     user.sub,
@@ -38,7 +40,7 @@ export function getTransactionOwnerValues(req: Request): string[] {
 
 export function resolveTransactionOwnerId(req: Request): string {
   const user = (req as any).user || {};
-  return cleanValues([user.userId, user.id, user._id, user.sub, user.username, user.email, user.name])[0] || '';
+  return cleanValues([user.userId, user.portal_user_id, user.id, user._id, user.sub, user.finance_user_id, user.portal_email, user.username, user.email, user.name])[0] || '';
 }
 
 export function resolveTransactionActorName(req: Request, fallback?: any): string {

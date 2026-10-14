@@ -3,6 +3,16 @@ import bcrypt from 'bcrypt';
 import User from '../models/User';
 import { AuthRequest } from '../middleware/authMiddleware';
 
+const USER_ROLES = ['superuser', 'admin', 'finance', 'finance_input', 'corsec', 'user'];
+
+function normalizePortalUserId(value: any): string {
+  return String(value || '').trim();
+}
+
+function normalizePortalEmail(value: any): string {
+  return String(value || '').trim().toLowerCase();
+}
+
 export const getUsers = async (req: Request, res: Response) => {
   try {
     const users = await User.find({}, { password: 0, credentials: 0, currentChallenge: 0 });
@@ -14,7 +24,7 @@ export const getUsers = async (req: Request, res: Response) => {
 
 export const createUser = async (req: Request, res: Response) => {
   try {
-    const { username, name, password, role } = req.body;
+    const { username, name, password, role, portal_user_id, portal_email } = req.body;
     const normalizedUsername = String(username || '').trim();
     const normalizedPassword = String(password || '');
     const normalizedName = String(name || '').trim();
@@ -25,6 +35,9 @@ export const createUser = async (req: Request, res: Response) => {
 
     if (normalizedPassword.length < 6) {
       return res.status(400).json({ message: 'Password minimal 6 karakter.' });
+    }
+    if (!USER_ROLES.includes(String(role))) {
+      return res.status(400).json({ message: 'Role tidak valid.' });
     }
 
     const exists = await User.findOne({ username: normalizedUsername });
@@ -38,6 +51,8 @@ export const createUser = async (req: Request, res: Response) => {
       name: normalizedName || undefined,
       password: hashedPassword,
       role,
+      portal_email: normalizePortalEmail(portal_email ?? portal_user_id),
+      portal_user_id: normalizePortalUserId(portal_user_id),
       credentials: [],
     });
 
@@ -54,13 +69,22 @@ export const createUser = async (req: Request, res: Response) => {
 export const updateUser = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { username, name, password, role } = req.body;
+    const { username, name, password, role, portal_user_id, portal_email } = req.body;
 
     const updateData: any = {};
     if (username) updateData.username = username;
     if (name) updateData.name = name;
     if (password) updateData.password = await bcrypt.hash(password, 10);
-    if (role) updateData.role = role;
+    if (role) {
+      if (!USER_ROLES.includes(String(role))) {
+        return res.status(400).json({ message: 'Role tidak valid.' });
+      }
+      updateData.role = role;
+    }
+    if (portal_email !== undefined || portal_user_id !== undefined) {
+      updateData.portal_email = normalizePortalEmail(portal_email ?? portal_user_id);
+    }
+    if (portal_user_id !== undefined) updateData.portal_user_id = normalizePortalUserId(portal_user_id);
 
     const user = await User.findByIdAndUpdate(id, updateData, { new: true, select: '-password -credentials -currentChallenge' });
     if (!user) return res.status(404).json({ message: 'User not found' });
